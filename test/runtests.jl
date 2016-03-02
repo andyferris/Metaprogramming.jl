@@ -1,5 +1,6 @@
 using Metaprogramming
-using Base.Test
+using BaseTestNext
 
-# write your own tests here
-@test 1 == 1
+include("primitives.jl")
+include("mint.jl")
+include("vals.jl")
