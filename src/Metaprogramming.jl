@@ -12,6 +12,22 @@ typealias TrueOrFalse Union{Type{Val{true}},Type{Val{false}}}
 
 typealias VoidTuple{N} NTuple{N,Void}
 
+check_Tuple(T) = (T===Tuple || T===NTuple) && throw(ArgumentError("parameters of $T are undefined"))
+
+function concatenate{T<:Tuple, S<:Tuple}(::Type{T}, ::Type{S})
+    check_Tuple(T); check_Tuple(S);
+    Base.isvatuple(T) && throw(ArgumentError("cannot concatenate the varargs tuple $T with $S"))
+    Tuple{T.parameters..., S.parameters...}
+end
+
+
+# Some instantiators - people can define a "default" instantiator for a type which won't require too much computation for Julia
+instantiate{T}(::Type{T}) = T()
+instantiate{T<:Number}(::Type{T}) = zero(T)
+instantiate{T<:AbstractString}(::Type{T}) = T(fieldtype(T,1)[])
+instantiate(::Type{Symbol}) = symbol("")
+instantiate{T}(::Type{Type{T}}) = T
+
 #"""
 #By default, Julia provides limited constructors for `Tuple`-types. This function
 #provides
@@ -88,6 +104,13 @@ _pop!{T1,T2}(::Type{MetaPair{T1,T2}}) = _pop!(T2,MetaPair{T1,Void})
 _pop!{T,Prev<:MetaPair}(::Type{MetaPair{T,Void}},::Type{Prev}) = (T,Prev)
 _pop!{T1,T2,Prev<:MetaPair}(::Type{MetaPair{T1,T2}},::Type{Prev}) = _pop!(T2,_push!(Prev,T1))
 
+_splat{T}(::Type{MetaPair{T,Void}}) = (T,)
+_splat{T,M<:MetaPair}(::Type{MetaPair{T,M}}) = (T,_splat(M)...)
+
+_splat_instances{T}(::Type{MetaPair{T,Void}}) = (instantiate(T),)
+_splat_instances{T,M<:MetaPair}(::Type{MetaPair{T,M}}) = (instantiate(T),_splat_instances(M)...)
+
+
 """
 `Vals` represents a meta-collection, with some similarities to `Tuple`, but
 designed to represent a collection of `Val` or or other types. Convenience
@@ -120,6 +143,19 @@ function Base.pop!{M}(::Type{Vals{M}})
     v,Vals{m}
 end
 
+# These seem to have strange return type:: Tuple{DataType,DataType,...} and not Tuple{Type{Int64},...} or whatever...
+# Also generate a LOT of code... (maybe that's splatting overhead that disappears in Julia 0.5?)
+tuple_from_Vals(::Type{Vals{Void}}) = ()
+tuple_from_Vals{M<:MetaPair}(::Type{Vals{M}}) = (_splat(M)...)
 
+# OLD VERSION: It seemed to not be type-stable (possibly a Julia deficiency?)
+#Tuple_from_Vals(::Type{Vals{Void}}) = Tuple{}
+#Tuple_from_Vals{T}(::Type{Vals{MetaPair{T,Void}}}) = Tuple{T}
+#Tuple_from_Vals{M<:MetaPair}(::Type{Vals{M}}) = Tuple{_splat(M)...}
+
+# NEW VERSION: Is type-stable but only generates a no-op for isbits types excluding symbols (so symbols, arrays, strings, Ref{}, etc cause overhead)
+# TODO: See if we can make this work through some C-calls or other hacking
+Tuple_from_Vals(::Type{Vals{Void}}) = Tuple{}
+Tuple_from_Vals{M<:MetaPair}(::Type{Vals{M}}) = typeof(_splat_instances(M))
 
 end # module
