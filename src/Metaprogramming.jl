@@ -12,11 +12,10 @@ typealias TrueOrFalse Union{Type{Val{true}},Type{Val{false}}}
 
 typealias VoidTuple{N} NTuple{N,Void}
 
-check_Tuple(T) = (T===Tuple || T===NTuple) && throw(ArgumentError("parameters of $T are undefined"))
-
+# Stolen from @mbauman but doesn't work in-general
+#check_Tuple(T) = (T===Tuple || T===NTuple) && throw(ArgumentError("parameters of $T are undefined"))
 function concatenate{T<:Tuple, S<:Tuple}(::Type{T}, ::Type{S})
-    check_Tuple(T); check_Tuple(S);
-    Base.isvatuple(T) && throw(ArgumentError("cannot concatenate the varargs tuple $T with $S"))
+    Base.@_pure_meta
     Tuple{T.parameters..., S.parameters...}
 end
 
@@ -26,7 +25,7 @@ instantiate{T}(::Type{T}) = T()
 instantiate{T<:Number}(::Type{T}) = zero(T)
 instantiate{T<:AbstractString}(::Type{T}) = T(fieldtype(T,1)[])
 instantiate(::Type{Symbol}) = symbol("")
-instantiate{T}(::Type{Type{T}}) = T
+instantiate{T}(::Type{Type{T}}) = T # ?
 
 #"""
 #By default, Julia provides limited constructors for `Tuple`-types. This function
@@ -39,6 +38,8 @@ A meta-integer `MInt{N}` is a special Julia type that naturally represents
 unsigned integers `N` and can be added, multiplied, etc. Internally it is
 manipulated using a tuple of `N` `nothing` values in order to make all
 operations type-safe and have zero run-time penalty.
+
+NOTE: Current Julia limitations mean this approach only works until N=8
 """
 immutable MInt{N}; end
 
@@ -56,8 +57,24 @@ Base.convert{N}(::Type{MInt{N}},::Type{Val{N}}) = MInt{N}
 
 # Base.promote_type(::Type{Val},::Type{MInt}) = ?
 
-+{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = MInt_from_VoidTuple(VoidTuple_from_MInt(x)...,VoidTuple_from_MInt(y)...)
--{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = MInt_from_VoidTuple(_subtract(Val{M},(),VoidTuple_from_MInt(x)...))
+# Generated version.
+#@generated +{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = :(MInt{$(N+M)})
+#@generated -{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = :(MInt{$(N-M)})
+
+# Pure version for Julia 0.5 (not working yet as of 3/3/2016)
+function +{N,M}(x::Type{MInt{N}},y::Type{MInt{M}})
+    Base.@_pure_meta
+    MInt{N+M}
+end
+function -{N,M}(x::Type{MInt{N}},y::Type{MInt{M}})
+    Base.@_pure_meta
+    MInt{N-M}
+end
+
+# Hacky method making use of NTuple{N,Void}, Brittle and
+#+{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = MInt_from_VoidTuple(VoidTuple_from_MInt(x)...,VoidTuple_from_MInt(y)...)
+#-{N,M}(x::Type{MInt{N}},y::Type{MInt{M}}) = MInt_from_VoidTuple(_subtract(Val{M},(),VoidTuple_from_MInt(x)...))
+
 
 _subtract{N}(::Type{Val{N}},::VoidTuple{N},nothing,out::Void...) = (nothing, out...)
 _subtract{N,M}(::Type{Val{N}},in::VoidTuple{M},nothing,out::Void...) = _subtract(Val{N},(nothing,in...),out...)
@@ -92,9 +109,17 @@ function Base.showall{T1,T2}(io::IO,::Type{MetaPair{T1,T2}})
     print(io,"}")
 end
 
-_getindex{T1,T2,N,X}(::Type{MetaPair{T1,T2}}, ::Type{Val{N}}, ::MInt{N},::Type{X}) = T1
-_getindex{T1,T2,N,M,X}(::Type{MetaPair{T1,T2}}, ::Type{Val{N}}, counter::MInt{M},::Type{X}) = _getindex(T2,Val{N},(nothing,counter...),X)
-_getindex{T,N,M,X}(::Type{MetaPair{T,Void}}, ::Type{Val{N}}, counter::MInt{M},::Type{X}) = throw(BoundsError(X,N))
+_length{T,N}(::Type{MetaPair{T,Void}}, ::Type{MInt{N}}) = MInt{N} + MInt{1}
+_length{T1,T2,N}(::Type{MetaPair{T1,T2}}, ::Type{MInt{N}}) = _length(T2, MInt{N} + MInt{1})
+
+_getindex{T1,T2,N,M}(::Type{MetaPair{T1,T2}}, ::Type{Val{N}}, counter::Type{MInt{M}}) = _getindex(T2,Val{N},counter+MInt{1},X)
+_getindex{T,N}(::Type{MetaPair{T,Void}}, ::Type{Val{N}}, counter::Type{MInt{N}}) = T
+_getindex{T,N,M}(::Type{MetaPair{T,Void}}, ::Type{Val{N}}, counter::Type{MInt{M}}) = throw(BoundsError(X,N))
+
+_getindex{T1,T2,N,X}(::Type{MetaPair{T1,T2}}, ::Type{Val{N}}, ::Type{MInt{N}},::Type{X}) = T1
+_getindex{T1,T2,N,M,X}(::Type{MetaPair{T1,T2}}, ::Type{Val{N}}, counter::Type{MInt{M}},::Type{X}) = _getindex(T2,Val{N},counter+MInt{1},X)
+_getindex{T,N,X}(::Type{MetaPair{T,Void}}, ::Type{Val{N}}, counter::Type{MInt{N}},::Type{X}) = T
+_getindex{T,N,M,X}(::Type{MetaPair{T,Void}}, ::Type{Val{N}}, counter::Type{MInt{M}},::Type{X}) = throw(BoundsError(X,N))
 
 _push!{T,X}(::Type{MetaPair{T,Void}},::Type{X}) = MetaPair{T,MetaPair{X,Void}}
 _push!{T1,T2,X}(::Type{MetaPair{T1,T2}},::Type{X}) = MetaPair{T1,_push!(T2,X)}
@@ -128,11 +153,11 @@ function Base.showall{T}(io::IO,::Type{Vals{T}})
 end
 
 
-Base.getindex{N}(::Type{Vals{Void}},::Type{Val{N}}) = throw(BoundsError(Vals{Void},N))
-Base.getindex{T,N}(x::Type{Vals{T}},::Type{Val{N}}) = _getindex(T,Val{N},(nothing,),Vals{T})
+Base.getindex{N}(::Type{Vals{Void}},::Union{Type{Val{N}},Type{MInt{N}}}) = throw(BoundsError(Vals{Void},N))
+Base.getindex{T,N}(x::Type{Vals{T}},::Union{Type{Val{N}},Type{MInt{N}}}) = _getindex(T,Val{N},MInt{1},Vals{T})
 
 Base.endof(::Type{Vals{Void}}) = Val{0}
-Base.endof{T}(::Type{Vals{T}}) = Val{0}
+Base.endof{T}(::Type{Vals{T}}) = _length(T, MInt{0})
 
 Base.push!{T}(::Type{Vals{Void}},::Type{T}) = Vals{MetaPair{T,Void}}
 Base.push!{M,T}(::Type{Vals{M}},::Type{T}) = Vals{_push!(M,T)}
@@ -142,6 +167,12 @@ function Base.pop!{M}(::Type{Vals{M}})
     v,m = _pop!(M)
     v,Vals{m}
 end
+
+Base.shift!(::Type{Vals{Void}}) = throw(ArgumentError("Vals{Void} must be non-empty"))
+Base.shift!{T,M}(::Type{Vals{MetaPair{T,M}}}) = (T,Vals{M})
+
+Base.unshift!{T,M}(::Type{Vals{M}},::Type{T}) = Vals{MetaPair{T,M}}
+
 
 # These seem to have strange return type:: Tuple{DataType,DataType,...} and not Tuple{Type{Int64},...} or whatever...
 # Also generate a LOT of code... (maybe that's splatting overhead that disappears in Julia 0.5?)
